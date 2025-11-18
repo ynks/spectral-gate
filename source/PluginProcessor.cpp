@@ -61,6 +61,10 @@ PluginProcessor::PluginProcessor()
     inputFIFO.fill(0.0f);
     outputFIFO.fill(0.0f);
     outputAccumulator.fill(0.0f);
+    
+    // Initialize spectrum data
+    spectrumMagnitudes.resize(fftSize / 2, 0.0f);
+    spectrumGateStatus.resize(fftSize / 2, false);
 }
 
 PluginProcessor::~PluginProcessor()
@@ -197,20 +201,32 @@ void PluginProcessor::processFFTFrame()
     
     // Apply spectral gate
     // FFT output is in format: [real0, real1, ..., realN/2, imag1, ..., imagN/2-1]
-    for (int i = 0; i < fftSize; i += 2)
     {
-        float real = fftData[i];
-        float imag = fftData[i + 1];
-        float magnitude = std::sqrt(real * real + imag * imag);
+        juce::ScopedLock lock(spectrumLock);
         
-        if (magnitude < cutoffLinear)
+        for (int i = 0; i < fftSize; i += 2)
         {
-            // Below threshold - attenuate based on balance
-            // balance = 0: full attenuation (strong gate)
-            // balance = 1: no attenuation (weak gate)
-            float gain = balance;
-            fftData[i] *= gain;
-            fftData[i + 1] *= gain;
+            float real = fftData[i];
+            float imag = fftData[i + 1];
+            float magnitude = std::sqrt(real * real + imag * imag);
+            
+            // Store magnitude for visualization
+            int bin = i / 2;
+            if (bin < static_cast<int>(spectrumMagnitudes.size()))
+            {
+                spectrumMagnitudes[bin] = magnitude;
+                spectrumGateStatus[bin] = (magnitude >= cutoffLinear);
+            }
+            
+            if (magnitude < cutoffLinear)
+            {
+                // Below threshold - attenuate based on balance
+                // balance = 0: full attenuation (strong gate)
+                // balance = 1: no attenuation (weak gate)
+                float gain = balance;
+                fftData[i] *= gain;
+                fftData[i + 1] *= gain;
+            }
         }
     }
     
@@ -334,6 +350,13 @@ void PluginProcessor::setStateInformation (const void* data, int sizeInBytes)
     if (xmlState.get() != nullptr)
         if (xmlState->hasTagName (parameters.state.getType()))
             parameters.replaceState (juce::ValueTree::fromXml (*xmlState));
+}
+
+void PluginProcessor::getSpectrumData(std::vector<float>& magnitudes, std::vector<bool>& gateStatus)
+{
+    juce::ScopedLock lock(spectrumLock);
+    magnitudes = spectrumMagnitudes;
+    gateStatus = spectrumGateStatus;
 }
 
 //==============================================================================

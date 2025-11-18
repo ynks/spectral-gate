@@ -41,6 +41,10 @@ public:
 
     // Parameter access for the editor
     juce::AudioProcessorValueTreeState& getParameters() { return parameters; }
+    
+    // Spectrum data access for visualization
+    void getSpectrumData(std::vector<float>& magnitudes, std::vector<bool>& gateStatus);
+    static constexpr int getFFTSize() { return fftSize; }
 
 private:
     // Parameters
@@ -65,6 +69,11 @@ private:
     int inputFIFOWritePos = 0;
     int outputFIFOReadPos = 0;
     int outputFIFOWritePos = 0;
+    
+    // Spectrum data for visualization
+    std::vector<float> spectrumMagnitudes;
+    std::vector<bool> spectrumGateStatus;
+    juce::CriticalSection spectrumLock;
 
     // Helper method to create parameter layout
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
