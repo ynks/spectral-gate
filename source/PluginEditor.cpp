@@ -1,8 +1,11 @@
 #include "PluginEditor.h"
 
 PluginEditor::PluginEditor (PluginProcessor& p)
-    : AudioProcessorEditor (&p), processorRef (p)
+    : AudioProcessorEditor (&p), processorRef (p), spectrumAnalyzer(p)
 {
+    // Setup spectrum analyzer
+    addAndMakeVisible(spectrumAnalyzer);
+    
     // Setup cutoff slider
     cutoffSlider.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
     cutoffSlider.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 80, 20);
@@ -50,7 +53,7 @@ PluginEditor::PluginEditor (PluginProcessor& p)
         inspector->setVisible (true);
     };
 
-    setSize (600, 400);
+    setSize (800, 500);
 }
 
 PluginEditor::~PluginEditor()
@@ -74,6 +77,9 @@ void PluginEditor::resized()
     
     // Title area
     area.removeFromTop(60);
+    
+    // Spectrum analyzer at the top
+    spectrumAnalyzer.setBounds(area.removeFromTop(180).reduced(20, 10));
     
     // Controls area
     auto controlsArea = area.reduced(20);
