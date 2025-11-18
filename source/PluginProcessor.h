@@ -1,6 +1,7 @@
 #pragma once
 
 #include <juce_audio_processors/juce_audio_processors.h>
+#include <juce_dsp/juce_dsp.h>
 
 #if (MSVC)
 #include "ipps.h"
@@ -38,6 +39,36 @@ public:
     void getStateInformation (juce::MemoryBlock& destData) override;
     void setStateInformation (const void* data, int sizeInBytes) override;
 
+    // Parameter access for the editor
+    juce::AudioProcessorValueTreeState& getParameters() { return parameters; }
+
 private:
+    // Parameters
+    juce::AudioProcessorValueTreeState parameters;
+    std::atomic<float>* cutoffAmplitudeParam = nullptr;
+    std::atomic<float>* weakStrongBalanceParam = nullptr;
+    std::atomic<float>* dryWetParam = nullptr;
+
+    // FFT processing
+    static constexpr int fftOrder = 10;  // 1024 samples
+    static constexpr int fftSize = 1 << fftOrder;
+    static constexpr int hopSize = fftSize / 4;  // 75% overlap
+    
+    juce::dsp::FFT forwardFFT;
+    juce::dsp::WindowingFunction<float> window;
+    
+    std::array<float, fftSize * 2> fftData;
+    std::array<float, fftSize> inputFIFO;
+    std::array<float, fftSize> outputFIFO;
+    std::array<float, fftSize> outputAccumulator;
+    
+    int inputFIFOWritePos = 0;
+    int outputFIFOReadPos = 0;
+    int outputFIFOWritePos = 0;
+
+    // Helper method to create parameter layout
+    static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
+    void processFFTFrame();
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginProcessor)
 };

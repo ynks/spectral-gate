@@ -2,6 +2,44 @@
 #include "PluginEditor.h"
 
 //==============================================================================
+juce::AudioProcessorValueTreeState::ParameterLayout PluginProcessor::createParameterLayout()
+{
+    juce::AudioProcessorValueTreeState::ParameterLayout layout;
+
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        "cutoff",
+        "Cutoff Amplitude",
+        juce::NormalisableRange<float>(-60.0f, 0.0f, 0.1f),
+        -30.0f,
+        juce::String(),
+        juce::AudioProcessorParameter::genericParameter,
+        [](float value, int) { return juce::String(value, 1) + " dB"; }
+    ));
+
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        "balance",
+        "Weak/Strong Balance",
+        juce::NormalisableRange<float>(0.0f, 1.0f, 0.01f),
+        0.5f,
+        juce::String(),
+        juce::AudioProcessorParameter::genericParameter,
+        [](float value, int) { return juce::String(static_cast<int>(value * 100.0f)) + "%"; }
+    ));
+
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        "drywet",
+        "Dry/Wet",
+        juce::NormalisableRange<float>(0.0f, 1.0f, 0.01f),
+        1.0f,
+        juce::String(),
+        juce::AudioProcessorParameter::genericParameter,
+        [](float value, int) { return juce::String(static_cast<int>(value * 100.0f)) + "%"; }
+    ));
+
+    return layout;
+}
+
+//==============================================================================
 PluginProcessor::PluginProcessor()
      : AudioProcessor (BusesProperties()
                      #if ! JucePlugin_IsMidiEffect
@@ -10,8 +48,19 @@ PluginProcessor::PluginProcessor()
                       #endif
                        .withOutput ("Output", juce::AudioChannelSet::stereo(), true)
                      #endif
-                       )
+                       ),
+       parameters(*this, nullptr, "Parameters", createParameterLayout()),
+       forwardFFT(fftOrder),
+       window(fftSize, juce::dsp::WindowingFunction<float>::hann)
 {
+    cutoffAmplitudeParam = parameters.getRawParameterValue("cutoff");
+    weakStrongBalanceParam = parameters.getRawParameterValue("balance");
+    dryWetParam = parameters.getRawParameterValue("drywet");
+
+    fftData.fill(0.0f);
+    inputFIFO.fill(0.0f);
+    outputFIFO.fill(0.0f);
+    outputAccumulator.fill(0.0f);
 }
 
 PluginProcessor::~PluginProcessor()
@@ -86,9 +135,16 @@ void PluginProcessor::changeProgramName (int index, const juce::String& newName)
 //==============================================================================
 void PluginProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
-    // Use this method as the place to do any pre-playback
-    // initialisation that you need..
     juce::ignoreUnused (sampleRate, samplesPerBlock);
+    
+    // Reset buffers
+    fftData.fill(0.0f);
+    inputFIFO.fill(0.0f);
+    outputFIFO.fill(0.0f);
+    outputAccumulator.fill(0.0f);
+    inputFIFOWritePos = 0;
+    outputFIFOReadPos = 0;
+    outputFIFOWritePos = 0;
 }
 
 void PluginProcessor::releaseResources()
@@ -119,6 +175,86 @@ bool PluginProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
   #endif
 }
 
+void PluginProcessor::processFFTFrame()
+{
+    // Get parameter values
+    const float cutoffDB = cutoffAmplitudeParam->load();
+    const float cutoffLinear = juce::Decibels::decibelsToGain(cutoffDB);
+    const float balance = weakStrongBalanceParam->load();
+    
+    // Copy input to FFT buffer
+    for (int i = 0; i < fftSize; ++i)
+    {
+        fftData[i] = inputFIFO[i];
+        fftData[fftSize + i] = 0.0f;
+    }
+    
+    // Apply window
+    window.multiplyWithWindowingTable(fftData.data(), fftSize);
+    
+    // Perform forward FFT
+    forwardFFT.performRealOnlyForwardTransform(fftData.data(), true);
+    
+    // Apply spectral gate
+    // FFT output is in format: [real0, real1, ..., realN/2, imag1, ..., imagN/2-1]
+    for (int i = 0; i < fftSize; i += 2)
+    {
+        float real = fftData[i];
+        float imag = fftData[i + 1];
+        float magnitude = std::sqrt(real * real + imag * imag);
+        
+        if (magnitude < cutoffLinear)
+        {
+            // Below threshold - attenuate based on balance
+            // balance = 0: full attenuation (strong gate)
+            // balance = 1: no attenuation (weak gate)
+            float gain = balance;
+            fftData[i] *= gain;
+            fftData[i + 1] *= gain;
+        }
+    }
+    
+    // Perform inverse FFT
+    forwardFFT.performRealOnlyInverseTransform(fftData.data());
+    
+    // Apply window and add to output accumulator (overlap-add)
+    window.multiplyWithWindowingTable(fftData.data(), fftSize);
+    
+    for (int i = 0; i < fftSize; ++i)
+    {
+        outputAccumulator[i] += fftData[i];
+    }
+    
+    // Copy first hop to output FIFO
+    for (int i = 0; i < hopSize; ++i)
+    {
+        outputFIFO[outputFIFOWritePos] = outputAccumulator[i];
+        outputFIFOWritePos = (outputFIFOWritePos + 1) % fftSize;
+    }
+    
+    // Shift accumulator
+    for (int i = 0; i < fftSize - hopSize; ++i)
+    {
+        outputAccumulator[i] = outputAccumulator[i + hopSize];
+    }
+    for (int i = fftSize - hopSize; i < fftSize; ++i)
+    {
+        outputAccumulator[i] = 0.0f;
+    }
+    
+    // Shift input FIFO
+    for (int i = 0; i < fftSize - hopSize; ++i)
+    {
+        inputFIFO[i] = inputFIFO[i + hopSize];
+    }
+    for (int i = fftSize - hopSize; i < fftSize; ++i)
+    {
+        inputFIFO[i] = 0.0f;
+    }
+    
+    inputFIFOWritePos = fftSize - hopSize;
+}
+
 void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer,
                                               juce::MidiBuffer& midiMessages)
 {
@@ -128,26 +264,47 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     auto totalNumInputChannels  = getTotalNumInputChannels();
     auto totalNumOutputChannels = getTotalNumOutputChannels();
 
-    // In case we have more outputs than inputs, this code clears any output
-    // channels that didn't contain input data, (because these aren't
-    // guaranteed to be empty - they may contain garbage).
-    // This is here to avoid people getting screaming feedback
-    // when they first compile a plugin, but obviously you don't need to keep
-    // this code if your algorithm always overwrites all the output channels.
+    // Clear unused output channels
     for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
         buffer.clear (i, 0, buffer.getNumSamples());
 
-    // This is the place where you'd normally do the guts of your plugin's
-    // audio processing...
-    // Make sure to reset the state if your inner loop is processing
-    // the samples and the outer loop is handling the channels.
-    // Alternatively, you can process the samples with the channels
-    // interleaved by keeping the same state.
+    // Get dry/wet parameter
+    const float dryWet = dryWetParam->load();
+
+    const int numSamples = buffer.getNumSamples();
+    
+    // Process each channel
     for (int channel = 0; channel < totalNumInputChannels; ++channel)
     {
         auto* channelData = buffer.getWritePointer (channel);
-        juce::ignoreUnused (channelData);
-        // ..do something to the data...
+        
+        // Store dry signal for mixing later
+        std::vector<float> drySignal(channelData, channelData + numSamples);
+        
+        // Process each sample
+        for (int sample = 0; sample < numSamples; ++sample)
+        {
+            // Add sample to input FIFO
+            inputFIFO[inputFIFOWritePos] = channelData[sample];
+            inputFIFOWritePos++;
+            
+            // When we have a full hop, process FFT
+            if (inputFIFOWritePos >= fftSize)
+            {
+                processFFTFrame();
+            }
+            
+            // Get output from output FIFO
+            channelData[sample] = outputFIFO[outputFIFOReadPos];
+            outputFIFO[outputFIFOReadPos] = 0.0f;
+            outputFIFOReadPos = (outputFIFOReadPos + 1) % fftSize;
+        }
+        
+        // Apply dry/wet mix
+        for (int i = 0; i < numSamples; ++i)
+        {
+            channelData[i] = drySignal[i] * (1.0f - dryWet) + channelData[i] * dryWet;
+        }
     }
 }
 
@@ -165,17 +322,18 @@ juce::AudioProcessorEditor* PluginProcessor::createEditor()
 //==============================================================================
 void PluginProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
-    // You should use this method to store your parameters in the memory block.
-    // You could do that either as raw data, or use the XML or ValueTree classes
-    // as intermediaries to make it easy to save and load complex data.
-    juce::ignoreUnused (destData);
+    auto state = parameters.copyState();
+    std::unique_ptr<juce::XmlElement> xml (state.createXml());
+    copyXmlToBinary (*xml, destData);
 }
 
 void PluginProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
-    // You should use this method to restore your parameters from this memory block,
-    // whose contents will have been created by the getStateInformation() call.
-    juce::ignoreUnused (data, sizeInBytes);
+    std::unique_ptr<juce::XmlElement> xmlState (getXmlFromBinary (data, sizeInBytes));
+    
+    if (xmlState.get() != nullptr)
+        if (xmlState->hasTagName (parameters.state.getType()))
+            parameters.replaceState (juce::ValueTree::fromXml (*xmlState));
 }
 
 //==============================================================================
