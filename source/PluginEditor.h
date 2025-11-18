@@ -21,5 +21,19 @@ private:
     PluginProcessor& processorRef;
     std::unique_ptr<melatonin::Inspector> inspector;
     juce::TextButton inspectButton { "Inspect the UI" };
+    
+    // Parameter controls
+    juce::Slider cutoffSlider;
+    juce::Label cutoffLabel;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> cutoffAttachment;
+    
+    juce::Slider balanceSlider;
+    juce::Label balanceLabel;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> balanceAttachment;
+    
+    juce::Slider dryWetSlider;
+    juce::Label dryWetLabel;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> dryWetAttachment;
+    
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginEditor)
 };
