@@ -39,6 +39,21 @@ PluginEditor::PluginEditor (PluginProcessor& p)
     dryWetLabel.setJustificationType(juce::Justification::centred);
     addAndMakeVisible(dryWetLabel);
     
+    // Setup FFT size combo box
+    fftSizeComboBox.addItem("64", 1);
+    fftSizeComboBox.addItem("128", 2);
+    fftSizeComboBox.addItem("256", 3);
+    fftSizeComboBox.addItem("512", 4);
+    fftSizeComboBox.addItem("1024", 5);
+    fftSizeComboBox.addItem("2048", 6);
+    addAndMakeVisible(fftSizeComboBox);
+    fftSizeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
+        processorRef.getParameters(), "fftsize", fftSizeComboBox);
+    
+    fftSizeLabel.setText("FFT Size", juce::dontSendNotification);
+    fftSizeLabel.setJustificationType(juce::Justification::centred);
+    addAndMakeVisible(fftSizeLabel);
+    
     // Setup inspect button
     addAndMakeVisible (inspectButton);
 
@@ -102,6 +117,11 @@ void PluginEditor::resized()
     dryWetLabel.setBounds(dryWetArea.removeFromTop(30));
     dryWetSlider.setBounds(dryWetArea.removeFromTop(120));
     
+    // FFT size control at bottom center
+    auto fftSizeArea = area.removeFromBottom(60).withSizeKeepingCentre(200, 50);
+    fftSizeLabel.setBounds(fftSizeArea.removeFromTop(20));
+    fftSizeComboBox.setBounds(fftSizeArea);
+    
     // Inspect button at bottom
-    inspectButton.setBounds(getLocalBounds().removeFromBottom(60).withSizeKeepingCentre(120, 40));
+    inspectButton.setBounds(getLocalBounds().removeFromBottom(60).removeFromRight(140).withSizeKeepingCentre(120, 40));
 }

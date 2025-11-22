@@ -36,6 +36,14 @@ juce::AudioProcessorValueTreeState::ParameterLayout PluginProcessor::createParam
         [](float value, int) { return juce::String(static_cast<int>(value * 100.0f)) + "%"; }
     ));
 
+    // FFT size parameter (0=64, 1=128, 2=256, 3=512, 4=1024, 5=2048)
+    layout.add(std::make_unique<juce::AudioParameterChoice>(
+        "fftsize",
+        "FFT Size",
+        juce::StringArray{"64", "128", "256", "512", "1024", "2048"},
+        4  // Default to 1024
+    ));
+
     return layout;
 }
 
@@ -49,22 +57,19 @@ PluginProcessor::PluginProcessor()
                        .withOutput ("Output", juce::AudioChannelSet::stereo(), true)
                      #endif
                        ),
-       parameters(*this, nullptr, "Parameters", createParameterLayout()),
-       forwardFFT(fftOrder),
-       window(fftSize, juce::dsp::WindowingFunction<float>::hann)
+       parameters(*this, nullptr, "Parameters", createParameterLayout())
 {
     cutoffAmplitudeParam = parameters.getRawParameterValue("cutoff");
     weakStrongBalanceParam = parameters.getRawParameterValue("balance");
     dryWetParam = parameters.getRawParameterValue("drywet");
+    fftSizeParam = parameters.getRawParameterValue("fftsize");
 
-    fftData.fill(0.0f);
-    inputFIFO.fill(0.0f);
-    outputFIFO.fill(0.0f);
-    outputAccumulator.fill(0.0f);
+    // Initialize with default FFT size
+    updateFFTSize();
     
     // Initialize spectrum data
-    spectrumMagnitudes.resize(fftSize / 2, 0.0f);
-    spectrumGateStatus.resize(fftSize / 2, false);
+    spectrumMagnitudes.resize(currentFFTSize / 2, 0.0f);
+    spectrumGateStatus.resize(currentFFTSize / 2, false);
 }
 
 PluginProcessor::~PluginProcessor()
@@ -141,11 +146,14 @@ void PluginProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
     juce::ignoreUnused (sampleRate, samplesPerBlock);
     
+    // Update FFT size in case parameter changed
+    updateFFTSize();
+    
     // Reset buffers
-    fftData.fill(0.0f);
-    inputFIFO.fill(0.0f);
-    outputFIFO.fill(0.0f);
-    outputAccumulator.fill(0.0f);
+    std::fill(fftData.begin(), fftData.end(), 0.0f);
+    std::fill(inputFIFO.begin(), inputFIFO.end(), 0.0f);
+    std::fill(outputFIFO.begin(), outputFIFO.end(), 0.0f);
+    std::fill(outputAccumulator.begin(), outputAccumulator.end(), 0.0f);
     inputFIFOWritePos = 0;
     outputFIFOReadPos = 0;
     outputFIFOWritePos = 0;
@@ -179,6 +187,56 @@ bool PluginProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
   #endif
 }
 
+int PluginProcessor::fftSizeToOrder(int size) const
+{
+    switch (size)
+    {
+        case 64: return 6;
+        case 128: return 7;
+        case 256: return 8;
+        case 512: return 9;
+        case 1024: return 10;
+        case 2048: return 11;
+        default: return 10; // Default to 1024
+    }
+}
+
+void PluginProcessor::updateFFTSize()
+{
+    // Get FFT size from parameter (0=64, 1=128, 2=256, 3=512, 4=1024, 5=2048)
+    const int sizeIndex = static_cast<int>(fftSizeParam->load());
+    const int sizes[] = {64, 128, 256, 512, 1024, 2048};
+    const int newSize = sizes[juce::jlimit(0, 5, sizeIndex)];
+    
+    if (newSize != currentFFTSize)
+    {
+        currentFFTSize = newSize;
+        currentFFTOrder = fftSizeToOrder(newSize);
+        currentHopSize = currentFFTSize / 4; // 75% overlap
+        
+        // Recreate FFT and window
+        forwardFFT = std::make_unique<juce::dsp::FFT>(currentFFTOrder);
+        window = std::make_unique<juce::dsp::WindowingFunction<float>>(
+            currentFFTSize, juce::dsp::WindowingFunction<float>::hann);
+        
+        // Resize buffers
+        fftData.resize(currentFFTSize * 2, 0.0f);
+        inputFIFO.resize(currentFFTSize, 0.0f);
+        outputFIFO.resize(currentFFTSize, 0.0f);
+        outputAccumulator.resize(currentFFTSize, 0.0f);
+        
+        // Reset positions
+        inputFIFOWritePos = 0;
+        outputFIFOReadPos = 0;
+        outputFIFOWritePos = 0;
+        
+        // Update spectrum data sizes
+        juce::ScopedLock lock(spectrumLock);
+        spectrumMagnitudes.resize(currentFFTSize / 2, 0.0f);
+        spectrumGateStatus.resize(currentFFTSize / 2, false);
+    }
+}
+
 void PluginProcessor::processFFTFrame()
 {
     // Get parameter values
@@ -187,24 +245,24 @@ void PluginProcessor::processFFTFrame()
     const float balance = weakStrongBalanceParam->load();
     
     // Copy input to FFT buffer
-    for (int i = 0; i < fftSize; ++i)
+    for (int i = 0; i < currentFFTSize; ++i)
     {
         fftData[i] = inputFIFO[i];
-        fftData[fftSize + i] = 0.0f;
+        fftData[currentFFTSize + i] = 0.0f;
     }
     
     // Apply window
-    window.multiplyWithWindowingTable(fftData.data(), fftSize);
+    window->multiplyWithWindowingTable(fftData.data(), currentFFTSize);
     
     // Perform forward FFT
-    forwardFFT.performRealOnlyForwardTransform(fftData.data(), true);
+    forwardFFT->performRealOnlyForwardTransform(fftData.data(), true);
     
     // Apply spectral gate
     // FFT output is in format: [real0, real1, ..., realN/2, imag1, ..., imagN/2-1]
     {
         juce::ScopedLock lock(spectrumLock);
         
-        for (int i = 0; i < fftSize; i += 2)
+        for (int i = 0; i < currentFFTSize; i += 2)
         {
             float real = fftData[i];
             float imag = fftData[i + 1];
@@ -231,44 +289,45 @@ void PluginProcessor::processFFTFrame()
     }
     
     // Perform inverse FFT
-    forwardFFT.performRealOnlyInverseTransform(fftData.data());
+    forwardFFT->performRealOnlyInverseTransform(fftData.data());
     
-    // Apply window and add to output accumulator (overlap-add)
-    window.multiplyWithWindowingTable(fftData.data(), fftSize);
+    // Normalization factor for the FFT (JUCE doesn't normalize automatically)
+    const float normalizationFactor = 1.0f / static_cast<float>(currentFFTSize);
     
-    for (int i = 0; i < fftSize; ++i)
+    // Add to output accumulator (overlap-add) with normalization
+    for (int i = 0; i < currentFFTSize; ++i)
     {
-        outputAccumulator[i] += fftData[i];
+        outputAccumulator[i] += fftData[i] * normalizationFactor;
     }
     
     // Copy first hop to output FIFO
-    for (int i = 0; i < hopSize; ++i)
+    for (int i = 0; i < currentHopSize; ++i)
     {
         outputFIFO[outputFIFOWritePos] = outputAccumulator[i];
-        outputFIFOWritePos = (outputFIFOWritePos + 1) % fftSize;
+        outputFIFOWritePos = (outputFIFOWritePos + 1) % currentFFTSize;
     }
     
     // Shift accumulator
-    for (int i = 0; i < fftSize - hopSize; ++i)
+    for (int i = 0; i < currentFFTSize - currentHopSize; ++i)
     {
-        outputAccumulator[i] = outputAccumulator[i + hopSize];
+        outputAccumulator[i] = outputAccumulator[i + currentHopSize];
     }
-    for (int i = fftSize - hopSize; i < fftSize; ++i)
+    for (int i = currentFFTSize - currentHopSize; i < currentFFTSize; ++i)
     {
         outputAccumulator[i] = 0.0f;
     }
     
     // Shift input FIFO
-    for (int i = 0; i < fftSize - hopSize; ++i)
+    for (int i = 0; i < currentFFTSize - currentHopSize; ++i)
     {
-        inputFIFO[i] = inputFIFO[i + hopSize];
+        inputFIFO[i] = inputFIFO[i + currentHopSize];
     }
-    for (int i = fftSize - hopSize; i < fftSize; ++i)
+    for (int i = currentFFTSize - currentHopSize; i < currentFFTSize; ++i)
     {
         inputFIFO[i] = 0.0f;
     }
     
-    inputFIFOWritePos = fftSize - hopSize;
+    inputFIFOWritePos = currentFFTSize - currentHopSize;
 }
 
 void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer,
@@ -283,6 +342,9 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     // Clear unused output channels
     for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
         buffer.clear (i, 0, buffer.getNumSamples());
+
+    // Check if FFT size changed
+    updateFFTSize();
 
     // Get dry/wet parameter
     const float dryWet = dryWetParam->load();
@@ -305,7 +367,7 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer,
             inputFIFOWritePos++;
             
             // When we have a full hop, process FFT
-            if (inputFIFOWritePos >= fftSize)
+            if (inputFIFOWritePos >= currentFFTSize)
             {
                 processFFTFrame();
             }
@@ -313,7 +375,7 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer,
             // Get output from output FIFO
             channelData[sample] = outputFIFO[outputFIFOReadPos];
             outputFIFO[outputFIFOReadPos] = 0.0f;
-            outputFIFOReadPos = (outputFIFOReadPos + 1) % fftSize;
+            outputFIFOReadPos = (outputFIFOReadPos + 1) % currentFFTSize;
         }
         
         // Apply dry/wet mix

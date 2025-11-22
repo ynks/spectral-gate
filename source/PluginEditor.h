@@ -40,10 +40,11 @@ public:
         // Draw spectrum
         juce::Path spectrumPath;
         const int numBins = static_cast<int>(magnitudes.size());
-        const float binWidth = width / static_cast<float>(numBins);
+        const int displayBins = numBins / 2; // Only show first half (up to Nyquist)
+        const float binWidth = width / static_cast<float>(displayBins);
         
         bool pathStarted = false;
-        for (int i = 1; i < numBins / 2; ++i) // Only show first half (up to Nyquist)
+        for (int i = 1; i < displayBins; ++i)
         {
             const float magnitude = magnitudes[i];
             const float normalizedMag = juce::jlimit(0.0f, 1.0f, magnitude * 100.0f);
@@ -61,7 +62,7 @@ public:
         
         if (pathStarted)
         {
-            spectrumPath.lineTo(width / 2, height);
+            spectrumPath.lineTo(width, height);
             spectrumPath.closeSubPath();
             
             // Fill spectrum with gradient
@@ -78,7 +79,7 @@ public:
         
         // Draw gated regions in red
         g.setColour(juce::Colour(0xffff0000).withAlpha(0.3f));
-        for (int i = 1; i < numBins / 2; ++i)
+        for (int i = 1; i < displayBins; ++i)
         {
             if (!gateStatus[i])
             {
@@ -140,6 +141,10 @@ private:
     juce::Slider dryWetSlider;
     juce::Label dryWetLabel;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> dryWetAttachment;
+    
+    juce::ComboBox fftSizeComboBox;
+    juce::Label fftSizeLabel;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> fftSizeAttachment;
     
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginEditor)
 };
