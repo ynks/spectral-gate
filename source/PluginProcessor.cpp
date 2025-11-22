@@ -64,12 +64,26 @@ PluginProcessor::PluginProcessor()
     dryWetParam = parameters.getRawParameterValue("drywet");
     fftSizeParam = parameters.getRawParameterValue("fftsize");
 
-    // Initialize with default FFT size
-    updateFFTSize();
+    // Initialize FFT with default size first
+    currentFFTSize = 1024;
+    currentFFTOrder = 10;
+    currentHopSize = 256;
+    
+    forwardFFT = std::make_unique<juce::dsp::FFT>(currentFFTOrder);
+    window = std::make_unique<juce::dsp::WindowingFunction<float>>(
+        currentFFTSize, juce::dsp::WindowingFunction<float>::hann);
+    
+    fftData.resize(currentFFTSize * 2, 0.0f);
+    inputFIFO.resize(currentFFTSize, 0.0f);
+    outputFIFO.resize(currentFFTSize, 0.0f);
+    outputAccumulator.resize(currentFFTSize, 0.0f);
     
     // Initialize spectrum data
     spectrumMagnitudes.resize(currentFFTSize / 2, 0.0f);
     spectrumGateStatus.resize(currentFFTSize / 2, false);
+    
+    // Now update to the parameter value (will do nothing if already 1024)
+    updateFFTSize();
 }
 
 PluginProcessor::~PluginProcessor()
@@ -203,6 +217,10 @@ int PluginProcessor::fftSizeToOrder(int size) const
 
 void PluginProcessor::updateFFTSize()
 {
+    // If parameter not yet initialized, skip update
+    if (fftSizeParam == nullptr)
+        return;
+    
     // Get FFT size from parameter (0=64, 1=128, 2=256, 3=512, 4=1024, 5=2048)
     const int sizeIndex = static_cast<int>(fftSizeParam->load());
     const int sizes[] = {64, 128, 256, 512, 1024, 2048};
