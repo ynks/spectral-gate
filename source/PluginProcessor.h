@@ -44,7 +44,7 @@ public:
     
     // Spectrum data access for visualization
     void getSpectrumData(std::vector<float>& magnitudes, std::vector<bool>& gateStatus);
-    static constexpr int getFFTSize() { return fftSize; }
+    int getFFTSize() const { return currentFFTSize; }
 
 private:
     // Parameters
@@ -52,19 +52,23 @@ private:
     std::atomic<float>* cutoffAmplitudeParam = nullptr;
     std::atomic<float>* weakStrongBalanceParam = nullptr;
     std::atomic<float>* dryWetParam = nullptr;
+    std::atomic<float>* fftSizeParam = nullptr;
 
-    // FFT processing
-    static constexpr int fftOrder = 10;  // 1024 samples
-    static constexpr int fftSize = 1 << fftOrder;
-    static constexpr int hopSize = fftSize / 4;  // 75% overlap
+    // FFT processing - now dynamic
+    static constexpr int maxFFTOrder = 11;  // 2048 samples
+    static constexpr int maxFFTSize = 1 << maxFFTOrder;
     
-    juce::dsp::FFT forwardFFT;
-    juce::dsp::WindowingFunction<float> window;
+    int currentFFTOrder = 10;  // Default 1024 samples
+    int currentFFTSize = 1024;
+    int currentHopSize = 256;  // 75% overlap
     
-    std::array<float, fftSize * 2> fftData;
-    std::array<float, fftSize> inputFIFO;
-    std::array<float, fftSize> outputFIFO;
-    std::array<float, fftSize> outputAccumulator;
+    std::unique_ptr<juce::dsp::FFT> forwardFFT;
+    std::unique_ptr<juce::dsp::WindowingFunction<float>> window;
+    
+    std::vector<float> fftData;
+    std::vector<float> inputFIFO;
+    std::vector<float> outputFIFO;
+    std::vector<float> outputAccumulator;
     
     int inputFIFOWritePos = 0;
     int outputFIFOReadPos = 0;
@@ -78,6 +82,8 @@ private:
     // Helper method to create parameter layout
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
     void processFFTFrame();
+    void updateFFTSize();
+    int fftSizeToOrder(int size) const;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginProcessor)
 };
