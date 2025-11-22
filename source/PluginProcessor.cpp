@@ -222,7 +222,9 @@ void PluginProcessor::updateFFTSize()
         return;
     
     // Get FFT size from parameter (0=64, 1=128, 2=256, 3=512, 4=1024, 5=2048)
-    const int sizeIndex = static_cast<int>(fftSizeParam->load());
+    // AudioParameterChoice stores values as normalized floats, so convert back to index
+    const float normalizedValue = fftSizeParam->load();
+    const int sizeIndex = juce::roundToInt(normalizedValue * 5.0f);  // 6 options: 0-5
     const int sizes[] = {64, 128, 256, 512, 1024, 2048};
     const int newSize = sizes[juce::jlimit(0, 5, sizeIndex)];
     
