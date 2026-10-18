@@ -1,0 +1,57 @@
+export global Theme {
+    out property <color> body: #d6d0c4;
+    out property <color> body-dim: #d6d0c470;
+    out property <color> ink: #262320;
+    out property <color> ink-dim: #262320a0;
+    out property <color> ink-faint: #26232026;
+    out property <color> display: #1e1c1a;
+    out property <color> amber: #ffae42;
+    out property <color> amber-dim: #ffae4260;
+    out property <color> amber-off: #ffae4216;
+
+    out property <string> font: "Segoe UI";
+    out property <string> mono: "Consolas";
+}
+
+export struct ParamState {
+    value: float,
+    plain: float,
+    text: string,
+}
+
+// same order as ui_order in params
+export global P {
+    out property <int> threshold: 0;
+    out property <int> mode: 1;
+    out property <int> fft-size: 2;
+    out property <int> overlap: 3;
+    out property <int> attack: 4;
+    out property <int> release: 5;
+    out property <int> hysteresis: 6;
+    out property <int> depth: 7;
+    out property <int> tilt: 8;
+    out property <int> low-freq: 9;
+    out property <int> high-freq: 10;
+    out property <int> link: 11;
+    out property <int> freeze: 12;
+    out property <int> mix: 13;
+    out property <int> output: 14;
+    out property <int> density: 15;
+    out property <int> curve-first: 16;
+}
+
+export global Bridge {
+    in-out property <[ParamState]> params;
+
+    callback begin(int);
+    callback set(int, float);
+    callback end(int);
+    callback reset(int);
+    callback set-plain-in-gesture(int, float);
+
+    in property <image> spectrum;
+    in property <[float]> handle-y;
+    callback drag-handle(int, float);
+    callback drag-threshold(float, float);
+    callback flatten-curve();
+}

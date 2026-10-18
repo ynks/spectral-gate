@@ -1,0 +1,322 @@
+import { Theme, Bridge, P, ParamState } from "theme.slint";
+import { LedSlider, Pill, Caption } from "widgets.slint";
+
+export { Bridge, ParamState }
+
+// must match the spectrum renderer size
+global View {
+    out property <length> width: 508px;
+    out property <length> height: 180px;
+}
+
+component Tip inherits Rectangle {
+    in property <string> text;
+    width: t.preferred-width + 12px;
+    height: 18px;
+    background: Theme.body;
+    t := Text {
+        text: root.text;
+        font-family: Theme.mono;
+        font-size: 11px;
+        color: Theme.ink;
+    }
+}
+
+// click to go to the next value
+component Chip inherits Rectangle {
+    in property <int> index;
+    in property <int> count;
+    in property <string> prefix;
+    property <int> selected: round(Bridge.params[root.index].value * (root.count - 1));
+
+    width: t.preferred-width + 16px;
+    height: 22px;
+    border-width: 1.5px;
+    border-color: Theme.ink;
+    background: ta.has-hover ? Theme.ink-faint : transparent;
+    t := Text {
+        text: root.prefix + Bridge.params[root.index].text;
+        font-family: Theme.mono;
+        font-size: 11px;
+        color: Theme.ink;
+    }
+    ta := TouchArea {
+        clicked => {
+            Bridge.begin(root.index);
+            Bridge.set(root.index, mod(root.selected + 1, root.count) / (root.count - 1));
+            Bridge.end(root.index);
+        }
+    }
+}
+
+component CurveHandle inherits Rectangle {
+    in property <int> point;
+    in property <float> norm-y;
+    property <bool> active: ta.pressed || ta.has-hover;
+
+    x: View.width * root.point / 15 - self.width / 2;
+    y: View.height * root.norm-y - self.height / 2;
+    width: 22px;
+    height: 22px;
+
+    Rectangle {
+        width: root.active ? 10px : 8px;
+        height: self.width;
+        background: root.active ? Theme.body : Theme.display;
+        border-width: 1.5px;
+        border-color: Theme.body;
+    }
+
+    if root.active: Tip {
+        y: root.norm-y < 0.2 ? 24px : -20px;
+        text: Bridge.params[P.curve-first + root.point].text;
+    }
+
+    ta := TouchArea {
+        mouse-cursor: ns-resize;
+        pointer-event(e) => {
+            if (e.button == PointerEventButton.left && e.kind == PointerEventKind.down) {
+                Bridge.begin(P.curve-first + root.point);
+            }
+            if (e.button == PointerEventButton.left && e.kind == PointerEventKind.up) {
+                Bridge.end(P.curve-first + root.point);
+            }
+        }
+        moved => {
+            if (self.pressed) {
+                Bridge.drag-handle(root.point, clamp((root.y + self.mouse-y) / View.height, 0, 1));
+            }
+        }
+        double-clicked => {
+            Bridge.reset(P.curve-first + root.point);
+        }
+    }
+}
+
+component RangeMarker inherits Rectangle {
+    in property <int> index;
+    in property <string> label;
+    in property <bool> is-low;
+    property <float> pos: log(clamp(Bridge.params[root.index].plain, 20, 20000) / 20, 1000);
+    property <bool> active: ta.pressed || ta.has-hover;
+
+    Rectangle {
+        x: View.width * root.pos - 0.5px;
+        y: 0;
+        width: 1.5px;
+        height: View.height;
+        background: root.active ? Theme.body : Theme.body-dim;
+    }
+
+    tab := Rectangle {
+        property <length> w: 52px;
+        x: clamp(View.width * root.pos - (root.is-low ? 0px : self.w), 0px, View.width - self.w);
+        y: View.height + 6px;
+        width: self.w;
+        height: 18px;
+        background: root.active ? Theme.body : transparent;
+        border-width: 1.5px;
+        border-color: Theme.body;
+        Text {
+            text: root.active ? Bridge.params[root.index].text : root.label;
+            font-family: Theme.mono;
+            font-size: 10px;
+            color: root.active ? Theme.ink : Theme.body;
+        }
+        ta := TouchArea {
+            mouse-cursor: ew-resize;
+            pointer-event(e) => {
+                if (e.button == PointerEventButton.left && e.kind == PointerEventKind.down) {
+                    Bridge.begin(root.index);
+                }
+                if (e.button == PointerEventButton.left && e.kind == PointerEventKind.up) {
+                    Bridge.end(root.index);
+                }
+            }
+            moved => {
+                if (self.pressed) {
+                    Bridge.set-plain-in-gesture(root.index, 20 * pow(1000, clamp((tab.x + self.mouse-x + (root.is-low ? 0px : tab.w)) / View.width, 0, 1)));
+                }
+            }
+            double-clicked => {
+                Bridge.reset(root.index);
+            }
+        }
+    }
+}
+
+export component AppWindow inherits Window {
+    width: 560px;
+    height: 556px;
+    title: "Spectral Gate";
+    default-font-family: Theme.font;
+    background: Theme.body;
+
+    HorizontalLayout {
+        x: 16px;
+        y: 0;
+        width: parent.width - 32px;
+        height: 48px;
+        spacing: 8px;
+
+        Text {
+            text: "spectral gate";
+            font-family: Theme.font;
+            font-size: 16px;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            color: Theme.ink;
+            vertical-alignment: center;
+        }
+        Rectangle { horizontal-stretch: 1; }
+        VerticalLayout {
+            alignment: center;
+            Chip { index: P.fft-size; count: 5; prefix: "fft "; }
+        }
+        VerticalLayout {
+            alignment: center;
+            Chip { index: P.overlap; count: 3; prefix: "overlap "; }
+        }
+    }
+
+    Rectangle {
+        x: 12px;
+        y: 48px;
+        width: parent.width - 24px;
+        height: 236px;
+        background: Theme.display;
+
+        Rectangle {
+            x: 14px;
+            y: 14px;
+            width: View.width;
+            height: View.height;
+
+            Image {
+                width: parent.width;
+                height: parent.height;
+                source: Bridge.spectrum;
+                image-fit: fill;
+            }
+
+            bg-ta := TouchArea {
+                mouse-cursor: crosshair;
+                pointer-event(e) => {
+                    if (e.button == PointerEventButton.left && e.kind == PointerEventKind.down) {
+                        Bridge.begin(P.threshold);
+                        Bridge.drag-threshold(self.mouse-x / View.width, self.mouse-y / View.height);
+                    }
+                    if (e.button == PointerEventButton.left && e.kind == PointerEventKind.up) {
+                        Bridge.end(P.threshold);
+                    }
+                }
+                moved => {
+                    if (self.pressed) {
+                        Bridge.drag-threshold(clamp(self.mouse-x / View.width, 0, 1), clamp(self.mouse-y / View.height, 0, 1));
+                    }
+                }
+                double-clicked => {
+                    Bridge.flatten-curve();
+                }
+            }
+
+            RangeMarker { index: P.low-freq; label: "low"; is-low: true; }
+            RangeMarker { index: P.high-freq; label: "high"; is-low: false; }
+
+            for hy[i] in Bridge.handle-y: CurveHandle {
+                point: i;
+                norm-y: hy;
+            }
+
+            if bg-ta.pressed: Tip {
+                x: (View.width - self.width) / 2;
+                y: 8px;
+                text: "threshold " + Bridge.params[P.threshold].text;
+            }
+        }
+    }
+
+    HorizontalLayout {
+        x: 16px;
+        y: 300px;
+        width: parent.width - 32px;
+        height: 24px;
+        spacing: 6px;
+
+        Pill {
+            width: 64px;
+            text: "below";
+            on: Bridge.params[P.mode].value < 0.5;
+            clicked => { Bridge.begin(P.mode); Bridge.set(P.mode, 0); Bridge.end(P.mode); }
+        }
+        Pill {
+            width: 64px;
+            text: "above";
+            on: Bridge.params[P.mode].value >= 0.5;
+            clicked => { Bridge.begin(P.mode); Bridge.set(P.mode, 1); Bridge.end(P.mode); }
+        }
+        Rectangle { width: 10px; }
+        Pill {
+            width: 92px;
+            text: "stereo link";
+            on: Bridge.params[P.link].value > 0.5;
+            clicked => {
+                Bridge.begin(P.link);
+                Bridge.set(P.link, self.on ? 0 : 1);
+                Bridge.end(P.link);
+            }
+        }
+        Rectangle { horizontal-stretch: 1; }
+        Pill {
+            width: 72px;
+            text: "freeze";
+            on: Bridge.params[P.freeze].value > 0.5;
+            clicked => {
+                Bridge.begin(P.freeze);
+                Bridge.set(P.freeze, self.on ? 0 : 1);
+                Bridge.end(P.freeze);
+            }
+        }
+        Pill {
+            width: 104px;
+            text: "flatten curve";
+            clicked => { Bridge.flatten-curve(); }
+        }
+    }
+
+    HorizontalLayout {
+        x: 16px;
+        y: 336px;
+        width: parent.width - 32px;
+        height: parent.height - self.y - 16px;
+        spacing: 16px;
+
+        VerticalLayout {
+            width: (parent.width - 32px) / 3;
+            alignment: center;
+            spacing: 10px;
+            Caption { text: "GATE"; }
+            LedSlider { index: P.threshold; label: "THRESHOLD"; }
+            LedSlider { index: P.tilt; label: "TILT"; bipolar: true; }
+            LedSlider { index: P.hysteresis; label: "HYSTERESIS"; }
+        }
+        VerticalLayout {
+            width: (parent.width - 32px) / 3;
+            alignment: center;
+            spacing: 10px;
+            Caption { text: "MOTION"; }
+            LedSlider { index: P.attack; label: "ATTACK"; }
+            LedSlider { index: P.release; label: "RELEASE"; }
+            LedSlider { index: P.density; label: "DENSITY"; }
+        }
+        VerticalLayout {
+            width: (parent.width - 32px) / 3;
+            alignment: center;
+            spacing: 10px;
+            Caption { text: "OUTPUT"; }
+            LedSlider { index: P.depth; label: "DEPTH"; }
+            LedSlider { index: P.output; label: "GAIN"; bipolar: true; }
+            LedSlider { index: P.mix; label: "MIX"; }
+        }
+    }
+}

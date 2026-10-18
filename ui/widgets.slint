@@ -1,0 +1,138 @@
+import { Theme, Bridge } from "theme.slint";
+
+export component LedSlider inherits Rectangle {
+    in property <int> index;
+    in property <string> label;
+    in property <bool> bipolar: false;
+
+    property <float> value: Bridge.params[root.index].value;
+    property <bool> active: ta.pressed || ta.has-hover;
+    property <length> pitch: 9.5px;
+    property <length> cell: round(root.pitch * 0.72 / 1px) * 1px;
+    property <length> gap: root.pitch - root.cell;
+    property <length> spad: 5px;
+    property <length> strip-height: 2 * root.cell + root.gap + 2 * root.spad;
+    property <int> cells: max(1, floor((root.width - 2 * root.spad + root.gap) / root.pitch));
+    property <length> cells-x: (root.width - (root.cells * root.pitch - root.gap)) / 2;
+
+    height: 20px + root.strip-height;
+
+    Text {
+        x: 0;
+        y: 0;
+        height: 16px;
+        text: root.label;
+        font-family: Theme.font;
+        font-size: 9px;
+        font-weight: 700;
+        letter-spacing: 1.5px;
+        color: root.active ? Theme.ink : Theme.ink-dim;
+        vertical-alignment: center;
+    }
+
+    Text {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: 16px;
+        text: Bridge.params[root.index].text;
+        font-family: Theme.mono;
+        font-size: 12px;
+        color: Theme.ink;
+        horizontal-alignment: right;
+        vertical-alignment: center;
+    }
+
+    strip := Rectangle {
+        x: 0;
+        y: 20px;
+        width: root.width;
+        height: root.strip-height;
+        background: Theme.display;
+
+        for i in root.cells * 2: Rectangle {
+            property <int> c: mod(i, root.cells);
+            property <int> r: floor(i / root.cells);
+            property <float> t: (self.c + 0.5) / root.cells;
+            property <bool> lit: root.bipolar
+                ? (self.t >= 0.5 ? self.t <= root.value : self.t >= root.value)
+                : self.t <= root.value;
+            property <bool> center: root.bipolar && self.c == floor(root.cells / 2);
+            x: root.cells-x + self.c * root.pitch;
+            y: root.spad + self.r * root.pitch;
+            width: root.cell;
+            height: root.cell;
+            background: self.lit ? Theme.amber : (self.center ? Theme.amber-dim : Theme.amber-off);
+        }
+
+        ta := TouchArea {
+            property <float> start-value;
+            property <bool> fine;
+            property <float> pos: clamp((self.mouse-x - root.cells-x) / (root.cells * root.pitch - root.gap), 0, 1);
+            mouse-cursor: ew-resize;
+            pointer-event(e) => {
+                if (e.button == PointerEventButton.left && e.kind == PointerEventKind.down) {
+                    self.fine = e.modifiers.control || e.modifiers.shift;
+                    self.start-value = root.value;
+                    Bridge.begin(root.index);
+                    if (!self.fine) {
+                        Bridge.set(root.index, self.pos);
+                    }
+                }
+                if (e.button == PointerEventButton.left && e.kind == PointerEventKind.up) {
+                    Bridge.end(root.index);
+                }
+            }
+            moved => {
+                if (self.pressed) {
+                    Bridge.set(root.index, self.fine
+                        ? clamp(self.start-value + (self.mouse-x - self.pressed-x) / self.width * 0.1, 0, 1)
+                        : self.pos);
+                }
+            }
+            double-clicked => {
+                Bridge.reset(root.index);
+            }
+            scroll-event(e) => {
+                Bridge.begin(root.index);
+                Bridge.set(root.index, clamp(root.value + (e.delta-y + e.delta-x) / 1px / 1500, 0, 1));
+                Bridge.end(root.index);
+                accept
+            }
+        }
+    }
+}
+
+export component Pill inherits Rectangle {
+    in property <string> text;
+    in property <bool> on;
+    callback clicked();
+
+    height: 24px;
+    border-width: 1.5px;
+    border-color: Theme.ink;
+    background: root.on ? Theme.ink : (ta.has-hover ? Theme.ink-faint : transparent);
+
+    Text {
+        text: root.text;
+        font-family: Theme.font;
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 1px;
+        color: root.on ? Theme.body : Theme.ink;
+    }
+
+    ta := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+export component Caption inherits Text {
+    font-family: Theme.font;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1.5px;
+    color: Theme.ink;
+}
